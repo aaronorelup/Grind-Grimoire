@@ -1,0 +1,16 @@
+{
+  "name": "grind-and-grimoire",
+  "version": "1.0.0",
+  "description": "A Venice Beach wizard skateboarding story — Three.js",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "audio": "node tools/generate-audio.mjs"
+  },
+  "dependencies": {
+    "three": "^0.170.0",
+    "vite": "^6.4.3"
+  }
+}

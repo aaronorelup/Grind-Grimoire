@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GRIND &amp; GRIMOIRE — a Venice Beach wizard story</title>
+  <link rel="stylesheet" href="/src/styles.css" />
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- In-game HUD -->
+  <div id="hud" class="hidden">
+    <div id="stats">
+      <div class="bar-row"><span class="bar-label">HP</span><div class="bar"><div id="bar-hp" class="bar-fill hp"></div><span id="txt-hp" class="bar-txt"></span></div></div>
+      <div class="bar-row"><span class="bar-label">MP</span><div class="bar"><div id="bar-mp" class="bar-fill mp"></div><span id="txt-mp" class="bar-txt"></span></div></div>
+      <div class="bar-row"><span class="bar-label">ST</span><div class="bar"><div id="bar-st" class="bar-fill st"></div><span id="txt-st" class="bar-txt"></span></div></div>
+      <div class="bar-row"><span class="bar-label">EGO</span><div class="bar"><div id="bar-ego" class="bar-fill ego"></div><span id="txt-ego" class="bar-txt"></span></div></div>
+      <div id="wallet"><span id="cash">$20</span> · <span id="drip">drip 0/6</span></div>
+    </div>
+    <div id="topbar">
+      <div id="clock">2:00 PM</div>
+      <div id="objective">Find inspiration for tonight's open mic</div>
+    </div>
+    <div id="inspo"><span class="quill">✒</span> <span id="inspo-count">0</span>/12 inspiration</div>
+    <canvas id="minimap" width="180" height="180"></canvas>
+    <div id="prompt" class="hidden"></div>
+    <div id="toasts"></div>
+    <div id="compliment" class="hidden"></div>
+  </div>
+
+  <!-- Cinematic layer -->
+  <div id="cine" class="hidden">
+    <div id="bar-top" class="cine-bar"></div>
+    <div id="bar-bottom" class="cine-bar"></div>
+    <div id="dialogue" class="hidden">
+      <div id="speaker"></div>
+      <div id="dtext"></div>
+      <div id="dhint">SPACE ▸</div>
+    </div>
+    <div id="skiphint">ESC — skip scene</div>
+  </div>
+
+  <div id="vignette"></div>
+  <div id="fade"></div>
+
+  <!-- Shop menu (clothing) -->
+  <div id="shopmenu" class="hidden">
+    <h2 id="shop-title">DRIP SANCTUARY</h2>
+    <div id="shop-items"></div>
+    <div class="shop-hint">[E] leave · click to buy</div>
+  </div>
+
+  <!-- Title screen -->
+  <div id="title">
+    <div class="title-inner">
+      <h1>GRIND <span class="amp">&amp;</span> GRIMOIRE</h1>
+      <p class="subtitle">a Venice Beach wizard story</p>
+      <div id="load-status">summoning audio…</div>
+      <button id="start-btn" disabled>SUMMONING…</button>
+      <div class="controls">
+        <span><b>W A S D</b> skate</span><span><b>SPACE</b> ollie / wall-jump / grind-off</span>
+        <span><b>SHIFT</b> push harder</span><span><b>CLICK / F</b> fireball</span>
+        <span><b>E</b> enter shops · talk</span><span><b>Land on any edge</b> to grind</span>
+      </div>
+      <p class="credit">every asset conjured procedurally · voices, sounds &amp; music by ElevenLabs</p>
+    </div>
+  </div>
+
+  <!-- Ending -->
+  <div id="ending" class="hidden">
+    <div class="ending-inner">
+      <h1>OLLIE OVER MY HEART</h1>
+      <p class="subtitle">the poem was delivered. venice listened.</p>
+      <div id="ending-stats"></div>
+      <button id="replay-btn">SKATE AGAIN</button>
+      <p class="credit">GRIND &amp; GRIMOIRE — written, built &amp; art-directed by Claude<br/>voices, sound effects &amp; music generated with the ElevenLabs API</p>
+    </div>
+  </div>
+
+  <!-- Desktop gate: the game is keyboard+mouse only (WASD / SPACE / CLICK). -->
+  <script>
+    (function () {
+      var coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+      var noHover = window.matchMedia && window.matchMedia('(hover: none)').matches;
+      if (!(coarse && noHover)) return;
+      document.addEventListener('DOMContentLoaded', function () {
+        var t = document.getElementById('title');
+        if (!t) return;
+        t.innerHTML =
+          '<div class="title-inner">' +
+          '<h1>GRIND <span class="amp">&amp;</span> GRIMOIRE</h1>' +
+          '<p class="subtitle">a Venice Beach wizard story</p>' +
+          '<p style="max-width:34ch;margin:1.5rem auto;line-height:1.5">' +
+          'This one needs a keyboard and a mouse — you skate with <b>WASD</b>, ollie with <b>SPACE</b>, ' +
+          'and throw fireballs by clicking. Come back on a desktop and Kai will be waiting.' +
+          '</p>' +
+          '<p class="credit">every asset conjured procedurally · voices, sounds &amp; music by ElevenLabs</p>' +
+          '</div>';
+      });
+    })();
+  </script>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
