@@ -1,11 +1,19 @@
 # GRIND & GRIMOIRE
 *a Venice Beach wizard story*
 
+![Title screen](docs/screenshots/title_screen.png)
+
 You are **Kai**, a skateboarding wizard with a 2 AM open-mic slot and zero poems.
 Skate Venice Beach & Santa Monica from 2 PM to 2 AM, collect **12 inspiration**,
 fight off boardwalk crackhead-fiends, refill your mana with little treats, buy
 drip until strangers weep, and deliver the most fire spoken word the West Side
 has ever heard.
+
+| | |
+|---|---|
+| ![Venice Beach intro](docs/screenshots/intro_venice_beach.png) | ![Boardwalk at night](docs/screenshots/drip_wizard.png) |
+
+![Rooftop party finale](docs/screenshots/rooftop_party_finale.png)
 
 ## Run it
 
