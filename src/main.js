@@ -178,7 +178,13 @@ function advanceTime(dt) {
 // before; only a machine that has proven it cannot keep up trades pop-in for
 // playable. Characters are ~8 draw calls each, so this is the largest single
 // lever left once the static world is welded.
+// `shadow: 0` turns the shadow map off outright. That is worth more than any
+// other single rung: the shadow pass is a second render of every caster in the
+// sun's frustum (~190 draw calls here) *and* a texture lookup in every lit
+// fragment. A machine that cannot hold 30fps at 'low' gets a flat-lit world and
+// roughly double the frame rate for it.
 const TIERS = [
+  { name: 'potato', dpr: 0.6,  bloom: false, shadow: 0,    cull: 55 },
   { name: 'low',    dpr: 0.75, bloom: false, shadow: 1024, cull: 70 },
   { name: 'medium', dpr: 1.0,  bloom: true,  shadow: 1024, cull: 115 },
   { name: 'high',   dpr: 1.75, bloom: true,  shadow: 2048, cull: Infinity },
@@ -193,11 +199,23 @@ function applyTier() {
   renderer.setPixelRatio(Math.min(devicePixelRatio, q.dpr));
   composer.setSize(innerWidth, innerHeight);
   const sun = G.world.sun;
-  if (sun.shadow.mapSize.x !== q.shadow) {
+  const wantShadows = q.shadow > 0;
+  if (renderer.shadowMap.enabled !== wantShadows) {
+    renderer.shadowMap.enabled = wantShadows;
+    sun.castShadow = wantShadows;
+    // whether a material samples a shadow map is compiled into it, so every
+    // material has to be rebuilt when this flips
+    scene.traverse((o) => {
+      if (!o.isMesh || !o.material) return;
+      for (const m of Array.isArray(o.material) ? o.material : [o.material]) m.needsUpdate = true;
+    });
+  }
+  if (wantShadows && sun.shadow.mapSize.x !== q.shadow) {
     sun.shadow.mapSize.set(q.shadow, q.shadow);
     // force three to rebuild the shadow target at the new size
     if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
   }
+  if (!wantShadows && sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
   G.quality = q.name;
 }
 applyTier();

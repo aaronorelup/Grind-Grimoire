@@ -10,7 +10,10 @@ export class AudioManager {
     this.currentVoice = null;   // { src, resolve }
     this.loops = new Map();     // name -> {src,gain}
     this.masters = {};
-    this.ready = false;
+    this.ready = false;      // sfx decoded — the game is playable
+    this.allReady = false;   // music and voice decoded too
+    this._waiters = new Map();
+    this._voiceSeq = 0;
   }
 
   async init(onProgress) {
@@ -33,12 +36,40 @@ export class AudioManager {
         const ab = await (await fetch(url)).arrayBuffer();
         this.buffers.set(key, await this.ctx.decodeAudioData(ab));
       } catch { /* missing file -> synth fallback */ }
+      this._waiters.get(key)?.forEach((fn) => fn());
+      this._waiters.delete(key);
       onProgress?.(++done, entries.length);
     };
-    // load in chunks of 8
-    for (let i = 0; i < entries.length; i += 8)
-      await Promise.all(entries.slice(i, i + 8).map(load));
+    const chunked = async (list) => {
+      for (let i = 0; i < list.length; i += 8) await Promise.all(list.slice(i, i + 8).map(load));
+    };
+
+    // Blocking on all of it meant 9MB before the title screen would let you in —
+    // 10-15s on a home connection. The sfx are 700KB and are the only thing the
+    // game cannot fake, so they are the only thing worth waiting for. Music and
+    // voice (8MB between them) stream in behind the title screen, and voice() waits
+    // briefly on the one line it needs rather than on the whole cast.
+    const critical = entries.filter(([k]) => k.startsWith('sfx/'));
+    const deferred = entries.filter(([k]) => !k.startsWith('sfx/'));
+    await chunked(critical);
     this.ready = true;
+
+    // ordered so the intro narration and the day theme land first
+    const weight = (k) => (k.startsWith('music/day') ? 0 : /^voice\/(n_intro|k_intro)/.test(k) ? 1 : k.startsWith('voice/') ? 2 : 3);
+    deferred.sort((a, b) => weight(a[0]) - weight(b[0]));
+    this.rest = chunked(deferred).then(() => { this.allReady = true; });
+  }
+
+  // resolve once `key` is decoded, or after `ms` — a late voice line should delay
+  // its own subtitle, never the scene
+  waitFor(key, ms = 1200) {
+    if (this.buffers.has(key) || this.allReady) return Promise.resolve(this.buffers.has(key));
+    return new Promise((resolve) => {
+      const list = this._waiters.get(key) || [];
+      const t = setTimeout(() => resolve(this.buffers.has(key)), ms);
+      list.push(() => { clearTimeout(t); resolve(true); });
+      this._waiters.set(key, list);
+    });
   }
 
   resume() { this.ctx?.resume(); }
@@ -97,8 +128,11 @@ export class AudioManager {
   }
 
   // Play a voice line; resolves when it ends. Falls back to a reading-time delay.
-  voice(id, textLen = 40) {
+  async voice(id, textLen = 40) {
     this.stopVoice();
+    const seq = ++this._voiceSeq;
+    await this.waitFor(`voice/${id}`);
+    if (seq !== this._voiceSeq) return;   // superseded while we waited on the buffer
     return new Promise((resolve) => {
       const h = this._play(`voice/${id}`, { out: 'voice' });
       if (!h) { const t = setTimeout(resolve, 900 + textLen * 45); this.currentVoice = { stop: () => { clearTimeout(t); resolve(); } }; return; }
