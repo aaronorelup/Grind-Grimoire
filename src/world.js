@@ -235,7 +235,106 @@ export class World {
     if (props) scene.add(props);
 
     this._buildRailGrid();
+    this.bakeStatic();
     this.setTime(14);
+  }
+
+  // ------------------------------------------------------------ static bake
+  // The world reads as ~900 separate boxes, each carrying its own material —
+  // roughly 500 draw calls a frame before anything moves, plus ~270 more for the
+  // shadow pass. A desktop GPU shrugs that off; integrated graphics spend the
+  // entire frame budget on per-draw driver overhead, which is why the game
+  // crawled on a laptop. Everything that never moves is welded here into one
+  // mesh per material — the same trick `Batcher` already plays for street props,
+  // applied to the rest of the world after the fact.
+  //
+  // Merged meshes span the map, so per-object frustum culling stops helping and
+  // every baked triangle is submitted every frame. At ~116k triangles total that
+  // is a trade worth making many times over: triangles are free here, draw calls
+  // are not.
+  bakeStatic() {
+    this.scene.updateMatrixWorld(true);
+
+    // things that animate have to stay individually addressable
+    const dynamic = new Set();
+    const mark = (o) => { if (o && o.traverse) o.traverse((x) => dynamic.add(x)); };
+    mark(this.wheel);
+    for (const g of this.gondolas || []) mark(g.mesh);
+    for (const i of this.inspirations) mark(i.mesh);
+    for (const c of this.cashes) mark(c.mesh);
+    for (const s of Object.values(this.shops)) mark(s.keeper && s.keeper.group);
+
+    // materials setTime mutates keep their own identity so the night lerp still lands
+    const pinned = new Set(this.nightMats.map((n) => n.mat));
+    if (this.oceanMat) pinned.add(this.oceanMat);
+
+    const sig = (m, mesh) => {
+      if (pinned.has(m) || m.isShaderMaterial || m.onBeforeCompile.length > 0) return 'pin:' + m.uuid;
+      return [
+        m.type, m.color && m.color.getHexString(), m.emissive && m.emissive.getHexString(),
+        m.emissiveIntensity, m.map ? m.map.uuid : '', m.emissiveMap ? m.emissiveMap.uuid : '',
+        m.alphaMap ? m.alphaMap.uuid : '', m.transparent, m.opacity, m.side, m.depthWrite,
+        m.depthTest, m.vertexColors, m.shininess, m.specular && m.specular.getHexString(),
+        m.flatShading, m.fog, mesh.renderOrder, mesh.castShadow, mesh.receiveShadow, mesh.layers.mask,
+      ].join('|');
+    };
+
+    const buckets = new Map();
+    this.scene.traverse((o) => {
+      if (!o.isMesh || o.isSkinnedMesh || o.isInstancedMesh) return;
+      if (!o.visible || dynamic.has(o)) return;
+      if (Array.isArray(o.material)) return;          // multi-material: leave alone
+      const key = sig(o.material, o);
+      let b = buckets.get(key);
+      if (!b) buckets.set(key, (b = { mat: o.material, meshes: [] }));
+      b.meshes.push(o);
+    });
+
+    let merged = 0, replaced = 0;
+    for (const b of buckets.values()) {
+      if (b.meshes.length < 2) continue;              // nothing to gain
+      let geos;
+      try {
+        geos = b.meshes.map((m) => m.geometry.clone().applyMatrix4(m.matrixWorld));
+        // mergeGeometries needs a uniform attribute set and a uniform index-ness
+        const common = geos.reduce(
+          (acc, g) => acc.filter((n) => g.attributes[n] !== undefined),
+          Object.keys(geos[0].attributes),
+        );
+        for (const g of geos) {
+          for (const name of Object.keys(g.attributes)) if (!common.includes(name)) g.deleteAttribute(name);
+          g.morphAttributes = {};
+          g.clearGroups();
+        }
+        if (geos.some((g) => g.index === null)) {
+          geos = geos.map((g) => (g.index === null ? g : g.toNonIndexed()));
+        }
+        const out = mergeGeometries(geos, false);
+        if (!out) throw new Error('merge returned null');
+
+        const mesh = new THREE.Mesh(out, b.mat);
+        mesh.castShadow = b.meshes[0].castShadow;
+        mesh.receiveShadow = b.meshes[0].receiveShadow;
+        mesh.renderOrder = b.meshes[0].renderOrder;
+        mesh.layers.mask = b.meshes[0].layers.mask;
+        mesh.matrixAutoUpdate = false;
+        this.scene.add(mesh);
+
+        for (const m of b.meshes) {
+          m.removeFromParent();
+          m.geometry.dispose();
+        }
+        merged++;
+        replaced += b.meshes.length;
+      } catch (e) {
+        // a bucket that will not weld is not worth breaking the world over
+        console.warn('[bakeStatic] skipped a bucket:', e.message);
+      } finally {
+        if (geos) for (const g of geos) g.dispose && g.dispose();
+      }
+    }
+    this.bakeStats = { merged, replaced, buckets: buckets.size };
+    console.info(`[bakeStatic] ${replaced} static meshes -> ${merged} merged draws`);
   }
 
   // ------------------------------------------------------------ collision api
@@ -389,7 +488,11 @@ export class World {
     this.hemi.intensity = THREE.MathUtils.lerp(0.9, 0.52, night);
 
     for (const nm of this.nightMats) nm.mat.emissiveIntensity = THREE.MathUtils.lerp(nm.day, nm.night, night);
-    for (const s of this.glowSprites) s.material.opacity = night * 0.85;
+    // fully-transparent sprites still cost a draw call each — 92 of them, all day
+    for (const s of this.glowSprites) {
+      s.material.opacity = night * 0.85;
+      s.visible = night > 0.02;
+    }
     if (this.oceanMat) this.oceanMat.color.copy(new THREE.Color(0x1273a0).lerp(new THREE.Color(0x0a1830), night));
   }
 

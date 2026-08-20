@@ -168,19 +168,125 @@ function advanceTime(dt) {
   }
 }
 
+// ---------------- adaptive quality ----------------
+// Integrated GPUs run out of draw-call budget here long before they run out of
+// fill rate, so the ladder gives up resolution and post first and the shadow map
+// last.
+//
+// `cull` is the radius past which crowd actors stop being drawn. The top tier
+// never culls, so hardware that was already fine sees exactly the scene it saw
+// before; only a machine that has proven it cannot keep up trades pop-in for
+// playable. Characters are ~8 draw calls each, so this is the largest single
+// lever left once the static world is welded.
+const TIERS = [
+  { name: 'low',    dpr: 0.75, bloom: false, shadow: 1024, cull: 70 },
+  { name: 'medium', dpr: 1.0,  bloom: true,  shadow: 1024, cull: 115 },
+  { name: 'high',   dpr: 1.75, bloom: true,  shadow: 2048, cull: Infinity },
+];
+let tier = TIERS.length - 1;
+let tierFloor = Infinity;   // lowest tier that has already failed — never retried
+let tierPinned = false;     // set by G.setQuality()
+const samples = [];
+
+function applyTier() {
+  const q = TIERS[tier];
+  renderer.setPixelRatio(Math.min(devicePixelRatio, q.dpr));
+  composer.setSize(innerWidth, innerHeight);
+  const sun = G.world.sun;
+  if (sun.shadow.mapSize.x !== q.shadow) {
+    sun.shadow.mapSize.set(q.shadow, q.shadow);
+    // force three to rebuild the shadow target at the new size
+    if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
+  }
+  G.quality = q.name;
+}
+applyTier();
+
+// crowd actors are groups of ~8 small meshes; hiding a whole group past the
+// tier's radius is worth ~8 draw calls apiece. Positions only — nothing in the
+// AI or the story reads `visible`.
+const _cullVec = new THREE.Vector3();
+function cullDistant() {
+  const R = TIERS[tier].cull;
+  if (!isFinite(R)) return;
+  const R2 = R * R, p = G.player.pos;
+  const test = (o) => {
+    if (!o || !o.isObject3D) return;
+    o.visible = o.getWorldPosition(_cullVec).distanceToSquared(p) <= R2;
+  };
+  const each = (v, fn) => {
+    if (Array.isArray(v)) v.forEach(fn);
+    else if (v && typeof v === 'object') Object.values(v).forEach(fn);
+  };
+  each(G.npcs.strangers, (n) => test(n.group || n.mesh));
+  each(G.npcs.friends, (n) => test(n.group || n.mesh));
+  each(G.traffic.cars, (c) => test(c.group || c.mesh));
+  each(G.enemies.list, (e) => test(e.group || e.mesh));
+  each(G.world.shops, (s) => test(s.keeper && s.keeper.group));
+}
+
+// The signal is the frame *period*, not the CPU time we spend inside the frame:
+// a GPU-bound machine finishes our JavaScript quickly and then waits, so CPU
+// time would report everything is fine while the picture crawls. Sampled as a
+// median over ~60 frames so one GC pause cannot demote the whole session, and
+// never while hidden (the loop deliberately falls back to a 50ms setTimeout
+// there, which would otherwise read as 20fps).
+function sampleQuality(periodMs, force = false) {
+  if (tierPinned || (document.hidden && !force)) return;
+  samples.push(periodMs);
+  if (samples.length < 60) return;
+  const med = samples.slice().sort((a, b) => a - b)[samples.length >> 1];
+  samples.length = 0;
+  if (med > 22 && tier > 0) {            // slower than ~45fps — drop a notch
+    tierFloor = Math.min(tierFloor, tier);
+    tier--;
+    applyTier();
+  } else if (med < 13 && tier + 1 < tierFloor && tier < TIERS.length - 1) {
+    tier++;                              // >75fps, and this tier has never failed
+    applyTier();
+  }
+}
+
 // ---------------- main loop ----------------
+// The simulation used to advance by `Math.min(0.05, delta)`, which meant any
+// machine under 20fps ran the world in literal slow motion — it did not just
+// *look* choppy on a weak laptop, the game genuinely moved slower. A big delta
+// is now split into fixed 1/60 slices so wall-clock time stays honest down to
+// ~10fps. Fast machines keep the old single variable-length step, so nothing
+// about the feel changes on hardware that was already fine.
 const clock = new THREE.Clock();
+const FIXED = 1 / 60;
+const MAX_SUBSTEPS = 6;
 let tGlobal = 0;
 
 function loop() {
   // keep simulating even when the tab is hidden (rAF throttles there)
   if (document.hidden) setTimeout(loop, 50);
   else requestAnimationFrame(loop);
-  tick(Math.min(0.05, clock.getDelta()));
+
+  const period = clock.getDelta();
+  // beyond MAX_SUBSTEPS of debt we drop time on purpose rather than death-spiral
+  let dt = Math.min(period, FIXED * MAX_SUBSTEPS);
+
+  if (dt <= FIXED * 1.5) {
+    step(dt);
+    G.input.endFrame();
+  } else {
+    let n = 0;
+    while (dt > 1e-4 && n < MAX_SUBSTEPS) {
+      const slice = Math.min(FIXED, dt);
+      step(slice);
+      dt -= slice;
+      if (n === 0) G.input.endFrame();   // only the first slice sees a keypress edge
+      n++;
+    }
+  }
+
+  render();
+  sampleQuality(period * 1000);
 }
 
-function tick(dt) {
-  fitViewport();
+function step(dt) {
   tGlobal += dt;
 
   G.world.update(dt, tGlobal);
@@ -214,21 +320,41 @@ function tick(dt) {
     G.player.syncMesh(dt, tGlobal);
   }
 
-  // screen shake
-  if (shakeAmt > 0.001) {
-    shakeAmt *= Math.pow(0.001, dt);
+  if (shakeAmt > 0.001) shakeAmt *= Math.pow(0.001, dt);
+  else shakeAmt = 0;
+}
+
+function render() {
+  fitViewport();
+  cullDistant();
+
+  // shake is a view offset, not simulation — applied once, after the last slice
+  if (shakeAmt > 0) {
     camera.position.x += (Math.random() - 0.5) * shakeAmt * 0.5;
     camera.position.y += (Math.random() - 0.5) * shakeAmt * 0.5;
   }
 
   if (G.state !== 'title' && G.state !== 'ended') G.hud.update();
-  composer.render();
-  G.input.endFrame();
+  if (TIERS[tier].bloom) composer.render();
+  else renderer.render(scene, camera);
 }
 loop();
 
 // ---- debug hooks (used by automated tests; harmless in production) ----
-G.tick = tick;
+G.tick = (dt) => { step(dt); G.input.endFrame(); render(); };
+// pin the quality ladder — for benchmarking, and for anyone stuck on a machine
+// where the auto-detect guesses wrong. `G.setQuality(null)` hands control back.
+// feed the ladder a synthetic frame period — lets a test walk the tiers without
+// needing a real slow GPU (and without a visible, compositing page).
+G.feedFrameTime = (periodMs) => { sampleQuality(periodMs, true); return G.quality; };
+G.setQuality = (name) => {
+  if (name === null) { tierPinned = false; tierFloor = Infinity; samples.length = 0; return G.quality; }
+  const i = TIERS.findIndex((t) => t.name === name);
+  if (i < 0) return G.quality;
+  tier = i; tierPinned = true; samples.length = 0;
+  applyTier();
+  return G.quality;
+};
 G.composer = composer;
 G.capture = async (name) => {
   composer.render();
